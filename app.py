@@ -5,17 +5,37 @@ from discord import app_commands
 from discord.ext import commands
 import threading
 import secrets
+import json
 import os
+import asyncio
+from datetime import datetime, timedelta
 
-# ============ Read from Railway Variables ============
-CLIENT_ID     = os.environ["CLIENT_ID"]
-CLIENT_SECRET = os.environ["CLIENT_SECRET"]
-BOT_TOKEN     = os.environ["BOT_TOKEN"]
-REDIRECT_URI  = os.environ["REDIRECT_URI"]
-# =====================================================
+# ============ FILL THESE IN ============
+CLIENT_ID = "client id"
+CLIENT_SECRET = "client secret"
+BOT_TOKEN = "bot token"
+REDIRECT_URI = "redirect uri"
+# =======================================
 
 API_BASE = "https://discord.com/api/v10"
-pending_joins = {}  # state → server_id
+pending_joins = {}          # state → server_id
+MEMBERS_FILE = "authorized_members.json"
+
+# ---------- Persistence ----------
+def load_members():
+    if os.path.exists(MEMBERS_FILE):
+        try:
+            with open(MEMBERS_FILE, "r") as f:
+                return json.load(f)
+        except:
+            return {}
+    return {}
+
+def save_members(data):
+    with open(MEMBERS_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+
+authorized_members = load_members()   # user_id → {access_token, username, expires_at, ...}
 
 # ---------- Flask (OAuth callback) ----------
 app = Flask(__name__)
@@ -50,7 +70,9 @@ def callback():
     if token_res.status_code != 200:
         return f"Token exchange failed:<br><pre>{token_res.text}</pre>", 400
 
-    access_token = token_res.json()["access_token"]
+    token_data = token_res.json()
+    access_token = token_data["access_token"]
+    expires_in = token_data.get("expires_in", 604800)  # default 7 days
 
     # Get user
     user_res = requests.get(
@@ -62,7 +84,17 @@ def callback():
     user_id = user["id"]
     username = user.get("global_name") or user["username"]
 
-    # Add to guild
+    # === SAVE TOKEN FOR RECOVERY ===
+    expires_at = (datetime.utcnow() + timedelta(seconds=expires_in)).isoformat()
+    authorized_members[user_id] = {
+        "access_token": access_token,
+        "username": username,
+        "expires_at": expires_at,
+        "last_used": datetime.utcnow().isoformat()
+    }
+    save_members(authorized_members)
+
+    # Add to the requested guild
     add_res = requests.put(
         f"{API_BASE}/guilds/{guild_id}/members/{user_id}",
         headers={
@@ -93,6 +125,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user}")
+    print(f"Loaded {len(authorized_members)} previously authorized members")
     try:
         synced = await bot.tree.sync()
         print(f"Synced {len(synced)} command(s)")
@@ -151,10 +184,100 @@ async def announce_join(interaction: discord.Interaction, server_id: str):
 
     await interaction.response.send_message(embed=embed, view=view)
 
+# ========== RECOVERY COMMANDS ==========
+
+@bot.tree.command(name="recover", description="Add ALL previously authorized members to a new server (Admin)")
+@app_commands.describe(server_id="The NEW server ID to recover members into")
+@app_commands.default_permissions(administrator=True)
+async def recover(interaction: discord.Interaction, server_id: str):
+    if not server_id.isdigit():
+        await interaction.response.send_message("Invalid server ID.", ephemeral=True)
+        return
+
+    if not authorized_members:
+        await interaction.response.send_message("No authorized members stored yet.", ephemeral=True)
+        return
+
+    await interaction.response.defer(ephemeral=True)
+
+    success = 0
+    failed = 0
+    expired = 0
+    total = len(authorized_members)
+
+    status_msg = await interaction.followup.send(
+        f"Starting recovery of **{total}** members into `{server_id}`...\nThis may take a while.",
+        ephemeral=True
+    )
+
+    for user_id, data in list(authorized_members.items()):
+        access_token = data["access_token"]
+        username = data.get("username", user_id)
+
+        # Optional: skip clearly expired tokens
+        try:
+            expires_at = datetime.fromisoformat(data.get("expires_at", "2000-01-01"))
+            if datetime.utcnow() > expires_at:
+                expired += 1
+                continue
+        except:
+            pass
+
+        try:
+            add_res = requests.put(
+                f"{API_BASE}/guilds/{server_id}/members/{user_id}",
+                headers={
+                    "Authorization": f"Bot {BOT_TOKEN}",
+                    "Content-Type": "application/json"
+                },
+                json={"access_token": access_token},
+                timeout=10
+            )
+
+            if add_res.status_code in (201, 204):
+                success += 1
+            else:
+                failed += 1
+                # If token is bad, remove it so we don't keep trying forever
+                if add_res.status_code in (400, 401, 403):
+                    authorized_members.pop(user_id, None)
+        except Exception:
+            failed += 1
+
+        # Small delay to respect rate limits
+        await asyncio.sleep(1.2)
+
+    save_members(authorized_members)
+
+    await status_msg.edit(
+        content=(
+            f"**Recovery finished for server `{server_id}`**\n"
+            f"✅ Successfully added: **{success}**\n"
+            f"❌ Failed: **{failed}**\n"
+            f"⏰ Skipped (expired token): **{expired}**\n"
+            f"Remaining stored members: **{len(authorized_members)}**"
+        )
+    )
+
+@bot.tree.command(name="recovery-stats", description="Show how many members are stored for recovery")
+@app_commands.default_permissions(administrator=True)
+async def recovery_stats(interaction: discord.Interaction):
+    count = len(authorized_members)
+    await interaction.response.send_message(
+        f"**Recovery database**\nStored authorized members: **{count}**",
+        ephemeral=True
+    )
+
+@bot.tree.command(name="clear-recovery", description="Wipe the stored member tokens (Admin)")
+@app_commands.default_permissions(administrator=True)
+async def clear_recovery(interaction: discord.Interaction):
+    authorized_members.clear()
+    save_members(authorized_members)
+    await interaction.response.send_message("Recovery database cleared.", ephemeral=True)
+
 # ---------- Start both ----------
 def run_flask():
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
+    app.run(host="127.0.0.1", port=5000, debug=False, use_reloader=False)
 
 if __name__ == "__main__":
     flask_thread = threading.Thread(target=run_flask, daemon=True)
