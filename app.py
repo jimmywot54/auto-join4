@@ -11,10 +11,10 @@ import asyncio
 from datetime import datetime, timedelta
 
 # ============ FILL THESE IN ============
-CLIENT_ID = "client id"
-CLIENT_SECRET = "client secret"
-BOT_TOKEN = "bot token"
-REDIRECT_URI = "redirect uri"
+CLIENT_ID = "client_id"
+CLIENT_SECRET = "client_secret"
+BOT_TOKEN = "paste_the_new_token_here"
+REDIRECT_URI = "redirect_url"
 # =======================================
 
 API_BASE = "https://discord.com/api/v10"
