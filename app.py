@@ -5,13 +5,14 @@ from discord import app_commands
 from discord.ext import commands
 import threading
 import secrets
+import os
 
-# ============ FILL THESE IN ============
-CLIENT_ID = ""
-CLIENT_SECRET = ""
-BOT_TOKEN = ""
-REDIRECT_URI = "http://localhost:5000/callback"
-# =======================================
+# ============ Read from Railway Variables ============
+CLIENT_ID     = os.environ["CLIENT_ID"]
+CLIENT_SECRET = os.environ["CLIENT_SECRET"]
+BOT_TOKEN     = os.environ["BOT_TOKEN"]
+REDIRECT_URI  = os.environ["REDIRECT_URI"]
+# =====================================================
 
 API_BASE = "https://discord.com/api/v10"
 pending_joins = {}  # state → server_id
@@ -37,8 +38,8 @@ def callback():
 
     # Exchange code
     data = {
-        "client_id": "",
-        "client_secret": "",
+        "client_id": CLIENT_ID,
+        "client_secret": CLIENT_SECRET,
         "grant_type": "authorization_code",
         "code": code,
         "redirect_uri": REDIRECT_URI,
@@ -152,7 +153,8 @@ async def announce_join(interaction: discord.Interaction, server_id: str):
 
 # ---------- Start both ----------
 def run_flask():
-    app.run(host="127.0.0.1", port=5000, debug=False, use_reloader=False)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
 
 if __name__ == "__main__":
     flask_thread = threading.Thread(target=run_flask, daemon=True)
