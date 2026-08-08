@@ -47,7 +47,6 @@ def index():
     return "Bot is running."
 
 def do_auto_recovery(guild_id: str, reason: str = "manual"):
-    """Adds all stored members to the given guild."""
     if not authorized_members:
         print(f"[RECOVERY] No members to recover ({reason})")
         return
@@ -61,7 +60,6 @@ def do_auto_recovery(guild_id: str, reason: str = "manual"):
         if not access_token:
             continue
 
-        # Skip expired
         try:
             expires_at = datetime.fromisoformat(data.get("expires_at", "2000-01-01"))
             if datetime.utcnow() > expires_at:
@@ -137,7 +135,6 @@ def callback():
     user_id = user["id"]
     username = user.get("global_name") or user["username"]
 
-    # Save member
     expires_at = (datetime.utcnow() + timedelta(seconds=expires_in)).isoformat()
     authorized_members[user_id] = {
         "access_token": access_token,
@@ -147,7 +144,6 @@ def callback():
     }
     save_json(MEMBERS_FILE, authorized_members)
 
-    # Add current user
     add_res = requests.put(
         f"{API_BASE}/guilds/{guild_id}/members/{user_id}",
         headers={
@@ -190,7 +186,6 @@ async def on_ready():
 
 @bot.event
 async def on_guild_remove(guild):
-    """Triggered when the bot is removed from a server OR the server is deleted."""
     print(f"[DETECT] Bot left / server deleted: {guild.name} ({guild.id})")
 
     target = config.get("recovery_target")
@@ -221,6 +216,17 @@ def create_auth_url(server_id: str) -> str:
         f"&scope=identify%20guilds.join"
         f"&state={state}"
         f"&prompt=consent"
+    )
+
+def create_bot_invite_url() -> str:
+    # Permissions: Administrator (8) so the bot can fully work in the new server
+    # You can change the number later if you want more limited permissions
+    permissions = 8
+    return (
+        f"https://discord.com/api/oauth2/authorize"
+        f"?client_id={CLIENT_ID}"
+        f"&permissions={permissions}"
+        f"&scope=bot%20applications.commands"
     )
 
 @bot.tree.command(name="join", description="Get a private link to join a server")
@@ -256,6 +262,25 @@ async def announce_join(interaction: discord.Interaction, server_id: str):
     view = discord.ui.View()
     view.add_item(discord.ui.Button(label="Join Server", url=auth_url, style=discord.ButtonStyle.link))
     await interaction.response.send_message(embed=embed, view=view)
+
+@bot.tree.command(name="add", description="Get a button to add this bot to other servers")
+async def add(interaction: discord.Interaction):
+    invite_url = create_bot_invite_url()
+
+    embed = discord.Embed(
+        title="Add Bot to Server",
+        description="Click the button below to invite this bot into another server.",
+        color=discord.Color.green()
+    )
+
+    view = discord.ui.View()
+    view.add_item(discord.ui.Button(
+        label="Add Bot to Server",
+        url=invite_url,
+        style=discord.ButtonStyle.link
+    ))
+
+    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 @bot.tree.command(name="set-recovery-target", description="Set the server members should be moved to when a server is deleted (Admin)")
 @app_commands.describe(server_id="The NEW server ID that will receive all members")
