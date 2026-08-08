@@ -219,9 +219,7 @@ def create_auth_url(server_id: str) -> str:
     )
 
 def create_bot_invite_url() -> str:
-    # Permissions: Administrator (8) so the bot can fully work in the new server
-    # You can change the number later if you want more limited permissions
-    permissions = 8
+    permissions = 8  # Administrator
     return (
         f"https://discord.com/api/oauth2/authorize"
         f"?client_id={CLIENT_ID}"
@@ -280,7 +278,8 @@ async def add(interaction: discord.Interaction):
         style=discord.ButtonStyle.link
     ))
 
-    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    # Public – everyone can see the button
+    await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
 
 @bot.tree.command(name="set-recovery-target", description="Set the server members should be moved to when a server is deleted (Admin)")
 @app_commands.describe(server_id="The NEW server ID that will receive all members")
