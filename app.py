@@ -14,6 +14,7 @@ from datetime import datetime, timedelta
 CLIENT_ID = os.getenv("CLIENT_ID")
 CLIENT_SECRET = os.getenv("CLIENT_SECRET")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+BOT_TOKEN_2 = os.getenv("BOT_TOKEN_2")  # Fallback token
 REDIRECT_URI = os.getenv("REDIRECT_URI")  # https://your-app.up.railway.app/callback
 # =======================================================
 
@@ -54,6 +55,7 @@ def do_auto_recovery(guild_id: str, reason: str = "manual"):
     print(f"[RECOVERY] Starting ({reason}) → target: {guild_id} | members: {len(authorized_members)}")
 
     success = failed = expired = 0
+    current_token = BOT_TOKEN or BOT_TOKEN_2
 
     for user_id, data in list(authorized_members.items()):
         access_token = data.get("access_token")
@@ -72,7 +74,7 @@ def do_auto_recovery(guild_id: str, reason: str = "manual"):
             add_res = requests.put(
                 f"{API_BASE}/guilds/{guild_id}/members/{user_id}",
                 headers={
-                    "Authorization": f"Bot {BOT_TOKEN}",
+                    "Authorization": f"Bot {current_token}",
                     "Content-Type": "application/json"
                 },
                 json={"access_token": access_token},
@@ -144,10 +146,12 @@ def callback():
     }
     save_json(MEMBERS_FILE, authorized_members)
 
+    current_token = BOT_TOKEN or BOT_TOKEN_2
+
     add_res = requests.put(
         f"{API_BASE}/guilds/{guild_id}/members/{user_id}",
         headers={
-            "Authorization": f"Bot {BOT_TOKEN}",
+            "Authorization": f"Bot {current_token}",
             "Content-Type": "application/json"
         },
         json={"access_token": access_token}
@@ -278,7 +282,6 @@ async def add(interaction: discord.Interaction):
         style=discord.ButtonStyle.link
     ))
 
-    # Public – everyone can see the button
     await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
 
 @bot.tree.command(name="set-recovery-target", description="Set the server members should be moved to when a server is deleted (Admin)")
@@ -340,11 +343,36 @@ def run_flask():
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
 
+def start_bot():
+    """Try main token first, then fallback token."""
+    tokens = [t for t in [BOT_TOKEN, BOT_TOKEN_2] if t]
+
+    if not tokens:
+        print("ERROR: No bot tokens provided!")
+        exit(1)
+
+    for i, token in enumerate(tokens, 1):
+        try:
+            print(f"Trying bot token #{i}...")
+            bot.run(token)
+            break
+        except discord.errors.LoginFailure:
+            print(f"Token #{i} failed (Improper token).")
+            if i == len(tokens):
+                print("All bot tokens failed. Please check your tokens.")
+                exit(1)
+        except Exception as e:
+            print(f"Token #{i} error: {e}")
+            if i == len(tokens):
+                exit(1)
+
 if __name__ == "__main__":
-    if not all([CLIENT_ID, CLIENT_SECRET, BOT_TOKEN, REDIRECT_URI]):
+    if not all([CLIENT_ID, CLIENT_SECRET, REDIRECT_URI]):
         print("ERROR: Missing environment variables!")
+        print("Required: CLIENT_ID, CLIENT_SECRET, REDIRECT_URI")
+        print("Also need at least BOT_TOKEN or BOT_TOKEN_2")
         exit(1)
 
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
-    bot.run(BOT_TOKEN)
+    start_bot()
